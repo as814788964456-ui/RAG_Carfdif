@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 可由指令重建的產出（python -m rag.ingest／rag.eval）
+data/index/
+data/eval/
+
+# data/contexts/golden.jsonl 保留在 repo 中，方便在沒有 embedding 模型的環境（如 Colab）直接餵給生成模型
+data/contexts/golden_variants.jsonl
+
+# 環境與金鑰
+.env
+*.env
