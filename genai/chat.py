@@ -24,7 +24,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("model", choices=MODELS)
     parser.add_argument("--no-4bit", action="store_true", help="不使用 4-bit 量化")
-    parser.add_argument("--gpu-mem", help="每張 GPU 最多使用的記憶體，如 6GiB（預設：顯卡記憶體減 2GiB）")
+    parser.add_argument("--gpu-mem", help="不量化時每張 GPU 最多使用的記憶體，如 6GiB（預設：剩餘記憶體減 0.5GiB）")
     parser.add_argument("--max-new-tokens", type=int, default=1024)
     args = parser.parse_args()
 

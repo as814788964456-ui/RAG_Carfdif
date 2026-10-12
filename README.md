@@ -28,8 +28,8 @@ RAG = 檢索（Retrieval）＋ 生成（Generation）。**檢索端已完成並�
 | 檢索評估 | ✅ | 黃金測試集 68 題（含口語／錯字變體共 204 次查詢） |
 | 已廢止文件過濾 | ✅ | `status: 已廢止` 一律不進檢索結果 |
 | Prompt 組裝與匯出 | ✅ | `ContextBuilder`；68 題已匯出成 `data/contexts/golden.jsonl` |
-| TAIDE 實際生成答案 | ❌ | 見[待辦事項](#七待辦事項) |
-| 生成品質評估 | ❌ | 引用正確率、拒答率尚未量測 |
+| TAIDE 實際生成答案 | 🟡 | 已在 3070 上跑通，約 15 tokens/秒；只試過 3 題知識庫問題（見 [6.5](#65-生成初步測試3-題)） |
+| 生成品質評估 | ❌ | 初步發現：內容正確但不照格式標出處、無答案題會編造；尚未完整量測 |
 | 可互動的 RAG 對話程式 | ❌ | |
 
 ## 二、專案結構
@@ -89,8 +89,8 @@ Embedding 模型不需要授權，第一次使用時自動下載。模型預設�
 
 | 用途 | 簡稱 | 模型 | 大小 | 執行方式 |
 |---|---|---|---|---|
-| 生成 | `llama` | [taide/Llama-3.1-TAIDE-LX-8B-Chat](https://huggingface.co/taide/Llama-3.1-TAIDE-LX-8B-Chat) | 約 16 GB（4-bit 後約 5.5 GB VRAM） | transformers＋bitsandbytes |
-| 生成 | `gemma` | [taide/Gemma-3-TAIDE-12b-Chat-2602](https://huggingface.co/taide/Gemma-3-TAIDE-12b-Chat-2602) | 約 24 GB（4-bit 後約 7–8 GB VRAM） | 同上 |
+| 生成 | `llama` | [taide/Llama-3.1-TAIDE-LX-8B-Chat](https://huggingface.co/taide/Llama-3.1-TAIDE-LX-8B-Chat) | 約 16 GB（4-bit 實測 6.2 GiB，生成時峰值 6.8 GiB） | transformers＋bitsandbytes |
+| 生成 | `gemma` | [taide/Gemma-3-TAIDE-12b-Chat-2602](https://huggingface.co/taide/Gemma-3-TAIDE-12b-Chat-2602) | 約 24 GB（4-bit 約 8 GiB，**8 GB 顯卡放不下**，需用 Colab） | 同上 |
 | Embedding | `bge-m3` | [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | 1024 維 | sentence-transformers（GPU fp16） |
 | Embedding | `xcloud` | [xCloudinfo/xVITA-Embed-300M-zhTW-GGUF](https://huggingface.co/xCloudinfo/xVITA-Embed-300M-zhTW-GGUF)（`xcloud-emb-zhtw-Q8_0.gguf`） | 768 維 | llama-cpp-python（CPU） |
 | Embedding | `xcloud-8k` | 同上長文版（`xcloud-emb-zhtw-8k-Q8_0.gguf`） | 768 維 | 同上（尚未評估） |
@@ -144,11 +144,15 @@ python gemma_taide.py "問題" --gpu-mem 7GiB      # 手動指定 GPU 記憶體�
 ### 5.1 生成模型模組（`genai/`）
 
 1. **兩個模型各自一個檔案**：`LlamaTaide`、`GemmaTaide` 介面相同，`generate(messages, max_new_tokens=1024, streamer=None)` 接收 `[{"role", "content"}]` 並回傳回覆文字。取樣參數：temperature 0.7、top_p 0.9、repetition_penalty 1.1。
-2. **4-bit 量化**：bitsandbytes NF4＋double quant。RTX 3070 只有 8 GB，8B 不量化需約 16 GB，量化後約 5.5 GB 可完全放進 GPU；12B 量化後仍超過，會有部分層放到 CPU（明顯變慢）。
+2. **4-bit 量化**：bitsandbytes NF4＋double quant。8B 不量化需約 16 GB；量化後實測權重 6.2 GiB、生成時峰值 6.8 GiB。比一般估計的 5.5 GB 多，是因為 Llama 3.1 詞彙表很大（128K），輸入嵌入層與輸出層不量化就各佔約 1 GB。
+   - **4-bit 模型必須整個放在 GPU 上**：bitsandbytes 0.50＋transformers 5.19 的組合下，4-bit 層只要被分到 CPU，載入時會出現 `Tensor.item() cannot be called on meta tensors`；關閉 double quant 後能載入，但生成時改出現 `Cannot copy out of meta tensor`。
+   - 因此 3070 上 Llama 8B 需要約 **7 GB 剩餘顯卡記憶體**，執行前要關閉遊戲等佔用顯卡的程式（實測遊戲執行時剩餘僅 5.1 GB，且兩者搶記憶體會使生成慢到無法使用）。Gemma 12B 在 8 GB 顯卡上無法執行。
+   - 實測（3070，無其他程式佔用）：載入 31 秒（第一次約 73 秒），生成約 **15 tokens/秒**，一段 200 tokens 的回答約 13 秒。
 3. **自動偵測硬體（`hardware.py`）**，讓同一份程式在本機、Colab、Kaggle 都能直接執行：
    - dtype：顯卡 compute capability ≥ 8（RTX 30 系列、L4、A100）用 bf16，否則（T4、P100）用 fp16。不用 `torch.cuda.is_bf16_supported()`，因為新版 torch 在 T4 上會因「可模擬」而回傳 True。
-   - GPU 記憶體上限：每張顯卡總量減 2 GiB（留給 KV cache），以 MiB 計算（3070 回報 7.99 GiB，若取整 GiB 會只剩 5 GiB 而放不下 8B）。
-   - CPU 記憶體上限：當下可用記憶體的 80%（原本寫死 24 GiB，在 Colab 約 12 GiB 的環境會出錯）。
+   - 以**目前實際剩餘**的顯卡記憶體（`torch.cuda.mem_get_info`）判斷，而不是顯卡總量，已扣除遊戲、瀏覽器等其他程式的佔用。
+   - 4-bit：單張 GPU 時整個模型放在 GPU 0；載入前比對各模型的需求（`vram_gib_4bit`：Llama 6.8、Gemma 9.0 GiB），不夠就直接提示要關閉哪些程式，而不是分到 CPU 後出錯。多張 GPU（Kaggle 2×T4）時由 accelerate 分配到各張 GPU，但不放到 CPU。
+   - 不量化（`--no-4bit`）：放不下的層可分到 CPU，CPU 上限為當下可用記憶體的 80%。
    - Gemma 在 fp16 下容易產生 NaN，偵測到 fp16 時會提出警告。
 4. `chat.py` 為命令列多輪對話，支援串流輸出。
 
@@ -267,13 +271,26 @@ python gemma_taide.py "問題" --gpu-mem 7GiB      # 手動指定 GPU 記憶體�
 3. 業務流程類 Hit@1 最低（0.708）。排第一的通常是**同主題的其他文件**，而不是 SOP 本身：例如「改受益人」排到 TRN-002 教材的小測驗、「解約金多久給」排到 GLO-001 術語解釋、「寄錯 email」排到 IT 資安 FAQ。正確的 SOP 多半仍在前 3 名，重排序或依文件類型加權可改善。
 4. 兩個模型前 5 名都找不到的只剩縮寫與俗稱：「VIP件」、「什麼是vip案件」、「政治人物投保」（答案在 GLO-002 縮寫對照表）。
 
+### 6.5 生成初步測試（3 題）
+
+用 Llama-3.1-TAIDE 8B（4-bit）對 `golden.jsonl` 中已組好的 prompt 生成，並逐句比對檢索到的原文：
+
+| 題目 | 內容正確性 | 出處標註 | 問題 |
+|---|---|---|---|
+| IT-01 忘記電腦密碼 | ✅ 步驟完整正確 | ❌ 沒有照 `[文件編號#章節]` 格式逐點標註 | 把「24 小時皆可使用」誤寫成「在 24 小時內」 |
+| IT-05 VPN 權限申請（版本衝突題） | ✅ 正確，沒有引用已廢止的舊版內容 | 🟡 只在最後列出出處清單 | — |
+| UNA-01 今年年終獎金幾個月（無答案題） | ❌ 編造「一般多在 1 至 3 個月」「約農曆年前後發放」「2024 年」 | — | 沒有直接回答「知識庫中查不到相關資訊」，最後才說無法確定 |
+
+結論：**檢索到的內容能被正確使用，但目前的 prompt 不足以讓 8B 模型遵守引用格式與拒答規則**，需要強化 prompt 並做完整的 68 題評估。
+
 ---
 
 ## 七、待辦事項
 
 ### 優先（RAG 主流程）
 
-- [ ] **生成答案**：新增 `rag/answer.py`，讀 `data/contexts/golden.jsonl` 用 Llama-3.1-TAIDE 8B 逐題生成並存檔（68 題在 3070 上預估 20–40 分鐘）
+- [ ] **生成答案**：新增 `rag/answer.py`，讀 `data/contexts/golden.jsonl` 用 Llama-3.1-TAIDE 8B 逐題生成並存檔（依實測約 15 tokens/秒，68 題約 15–20 分鐘）
+- [ ] **強化 prompt**：初步測試中模型不照格式逐點標出處、無答案題會用常識編造，可加入正確／錯誤範例、要求先判斷資料是否足夠，或降低 temperature
 - [ ] **生成品質自動評估**
   - [ ] 引用格式：回答是否含 `[文件編號#章節]`
   - [ ] 引用正確率：引用的段落是否在檢索結果中、是否對應 `expected_sources`
@@ -294,7 +311,8 @@ python gemma_taide.py "問題" --gpu-mem 7GiB      # 手動指定 GPU 記憶體�
 
 ### 工程
 
-- [ ] 生成時的 VRAM 規劃：Llama 4-bit（約 5.5 GB）與 bge-m3（約 1–2 GB）同時在 GPU 上會很緊，查詢時可把 bge-m3 改到 CPU
+- [ ] 生成時的 VRAM 規劃：Llama 4-bit 生成時已用到 6.8 GiB，8 GB 顯卡上**無法再同時放 bge-m3**，即時問答時 bge-m3 要改到 CPU
+- [ ] Gemma 12B 在本機的替代方案：改用 GGUF 版本＋llama.cpp（可穩定地部分放 GPU、部分放 CPU），或固定在 Colab 執行
 - [ ] `genai/` 改成可從 repo 根目錄直接 import（目前需要 `sys.path.insert(0, "genai")`）
 - [ ] 使用者介面（例如 Streamlit），顯示答案與出處原文
 

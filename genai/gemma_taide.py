@@ -14,11 +14,12 @@ SYSTEM_PROMPT = "你是一個來自台灣的AI助理，你的名字是 TAIDE，�
 
 class GemmaTaide:
     name = "gemma"
+    vram_gib_4bit = 9.0  # 4-bit 時約需的顯卡記憶體（權重約 8 GiB＋推論空間，8GB 顯卡放不下）
     repo_id = "taide/Gemma-3-TAIDE-12b-Chat-2602"
 
     def __init__(self, use_4bit=True, gpu_mem=None):
         self.tokenizer = AutoTokenizer.from_pretrained(self.repo_id)
-        kwargs = load_kwargs(use_4bit, gpu_mem)
+        kwargs = load_kwargs(use_4bit, gpu_mem, self.vram_gib_4bit)
         if kwargs["dtype"] == torch.float16:
             print("警告：此顯卡不支援 bf16，Gemma 在 fp16 下可能產生 NaN（回答空白或亂碼）")
         self.model = AutoModelForCausalLM.from_pretrained(self.repo_id, **kwargs)
@@ -49,7 +50,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("question")
     parser.add_argument("--no-4bit", action="store_true", help="不使用 4-bit 量化")
-    parser.add_argument("--gpu-mem", help="每張 GPU 最多使用的記憶體，如 6GiB（預設：顯卡記憶體減 2GiB）")
+    parser.add_argument("--gpu-mem", help="不量化時每張 GPU 最多使用的記憶體，如 6GiB（預設：剩餘記憶體減 0.5GiB）")
     args = parser.parse_args()
 
     llm = GemmaTaide(not args.no_4bit, args.gpu_mem)
