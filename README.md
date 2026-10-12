@@ -17,7 +17,7 @@
 
 ## 一、目前進度
 
-RAG = 檢索（Retrieval）＋ 生成（Generation）。**檢索與生成都已完成，並各自用黃金測試集量化評估；尚缺可互動的問答程式。**
+RAG = 檢索（Retrieval）＋ 生成（Generation）。**檢索與生成都已完成並各自用黃金測試集量化評估，也已經可以用 `python -m rag.chat` 直接對話提問。**
 
 | 階段 | 狀態 | 說明 |
 |---|---|---|
@@ -30,7 +30,7 @@ RAG = 檢索（Retrieval）＋ 生成（Generation）。**檢索與生成都已�
 | Prompt 組裝與匯出 | ✅ | `ContextBuilder`，3 個 prompt 版本，預設 v3；68 題已匯出成 `data/contexts/golden.jsonl` |
 | TAIDE 生成答案 | ✅ | Llama-3.1-TAIDE 8B 在 3070 上跑完 68 題 × 3 個 prompt 版本，約 11 秒／題 |
 | 生成品質評估 | ✅ | 自動評分：v3 引用到正確段落 86.9%、無答案題 7/7 使用標準拒答句（見 [6.2](#62-生成評估llama-31-taide-8b68-題)） |
-| 可互動的 RAG 對話程式 | ❌ | |
+| 可互動的 RAG 對話程式 | ✅ | `python -m rag.chat`：串流回答、列出出處、支援追問（見 [5.9](#59-rag-問答對話ragchatpy)） |
 
 ## 二、專案結構
 
@@ -40,7 +40,7 @@ RAG_Carfdif/
 │  ├─ llama_taide.py          LlamaTaide：Llama-3.1-TAIDE-LX-8B-Chat
 │  ├─ gemma_taide.py          GemmaTaide：Gemma-3-TAIDE-12b-Chat-2602
 │  ├─ hardware.py             依硬體自動決定 dtype、量化、記憶體上限
-│  └─ chat.py                 命令列多輪對話（尚未接 RAG）
+│  └─ chat.py                 命令列多輪對話（不查知識庫，單純和 TAIDE 聊天）
 ├─ embedding/                 Embedding 模型
 │  ├─ bge_m3.py               BgeM3Embedder（1024 維）
 │  ├─ xcloud.py               XCloudEmbedder（768 維，GGUF／llama.cpp）
@@ -52,7 +52,8 @@ RAG_Carfdif/
 │  ├─ retrieve.py             語意／BM25／RRF 融合檢索
 │  ├─ eval.py                 檢索評估（Hit@k、MRR、Recall@5）
 │  ├─ context.py              把檢索結果組成 prompt／messages（prompt v1–v3）
-│  └─ answer.py               用 TAIDE 生成答案並自動評分
+│  ├─ answer.py               用 TAIDE 生成答案並自動評分
+│  └─ chat.py                 RAG 問答對話（檢索＋TAIDE＋出處）
 ├─ data/
 │  ├─ knowledge-base/         知識庫 39 份文件＋黃金測試集
 │  ├─ contexts/golden.jsonl   68 題的檢索結果與 prompt（可直接餵給生成模型）
@@ -99,7 +100,14 @@ Embedding 模型不需要授權，第一次使用時自動下載。模型預設�
 
 ## 四、快速開始
 
-RAG 指令都在 repo 根目錄執行：
+**直接問問題**（需要約 7 GB 剩餘顯卡記憶體，請先關閉遊戲等佔用顯卡的程式）：
+
+```powershell
+python -m rag.ingest     # 第一次使用時先建索引（約 3 分鐘）
+python -m rag.chat       # 開始對話；/src 看參考資料、/reset 清除對話、/exit 離開
+```
+
+其他 RAG 指令（都在 repo 根目錄執行）：
 
 ```powershell
 python -m rag.ingest                              # 1. 切塊並建立 bge-m3、xcloud 索引 → data/index/
@@ -116,9 +124,8 @@ python -m rag.answer --score llama_v1 llama_v3    #    只評分，比較不同 
 把匯出的 prompt 交給 TAIDE 生成（此步驟不需要 embedding 模型，可分開在 Colab 執行）：
 
 ```python
-import json, sys
-sys.path.insert(0, "genai")
-from llama_taide import LlamaTaide
+import json
+from genai.llama_taide import LlamaTaide
 
 llm = LlamaTaide()
 for line in open("data/contexts/golden.jsonl", encoding="utf-8"):
@@ -126,12 +133,12 @@ for line in open("data/contexts/golden.jsonl", encoding="utf-8"):
     print(item["id"], llm.generate(item["messages"]))
 ```
 
-即時問答：
+在自己的程式中即時問答：
 
 ```python
 from rag.context import ContextBuilder
 result = ContextBuilder().build("忘記密碼怎麼辦")   # 回傳 messages、prompt、hits
-reply = llm.generate(result["messages"])
+reply = llm.generate(result["messages"], do_sample=False)
 ```
 
 單獨使用生成模型（在 `genai/` 目錄）：
@@ -236,6 +243,20 @@ python gemma_taide.py "問題" --gpu-mem 7GiB      # 手動指定 GPU 記憶體�
 | 引用 EX-001／已廢止 | 照抄 v2 範例中的虛構文件；回答中出現已廢止的舊版 VPN 內容 |
 
 - 評分規則本身也經過檢查：第一版規則把「章節名稱被改寫」判為無效出處、沒有拆開同一個方括號內的多個出處、把「查不到相關允許…」這類句子誤判為拒答，修正後才是下面的數字。
+
+### 5.9 RAG 問答對話（`rag/chat.py`）
+
+```powershell
+python -m rag.chat              # Llama-3.1-TAIDE 8B、prompt v3、bge-m3+xcloud 檢索
+python -m rag.chat -k 3         # 只給模型前 3 段參考資料（回答較快）
+```
+
+- **流程**：輸入問題 → 檢索前 5 段 → 依 prompt v3 組成 messages → TAIDE 串流輸出回答 → 列出回答中引用的出處（文件名稱、版本、生效日、章節、檔案路徑）。
+- **顯卡只放 TAIDE**：bge-m3 與 xcloud 一律在 CPU 執行（`get_embedder(..., device="cpu")`），每題檢索約 0.1–0.3 秒。
+- **追問**：問題很短（≤ 10 字）或含有「那、它、他、還是、剛剛、前面…」等指代前文的說法時，同時用「本輪問題」與「前一輪＋本輪問題」檢索並以 RRF 融合（`Retriever.search` 可接受多個查詢）。模型另外看得到最近 2 輪問答（`--history`）。
+- **出處顯示**：解析回答中的 `[文件編號#章節]` 對應回檢索結果；回答為拒答時提示可洽詢 GEN-002 的聯絡窗口；模型沒有標註出處時，列出檢索到的前 3 段資料。
+- **指令**：`/src` 顯示上一題檢索到的 5 段參考資料、`/reset` 清除對話歷史、`/exit` 離開。
+- 生成使用與評估相同的固定輸出設定（greedy、repetition_penalty 1.1），並關閉 transformers 的提示訊息，避免插在回答中間。
 
 ---
 
@@ -349,6 +370,27 @@ v1 的「出處有效率 1.000」是因為它很少標出處（只有 24.6% 的�
 
 自動評分只能檢查出處與數字類的事實，**無法判斷整段回答的意思是否正確**（例如 IT-07 讀錯資料、IT-17 結論模糊）。要完整判斷正確性，還需要人工評分或用更強的 LLM 當評審。
 
+### 6.3 對話測試（員工詢問情境 1–3）
+
+用 `test-set/員工詢問情境.md` 的情境 1（新人第一天）、情境 2（客戶要解約）、情境 3（VPN 連不上）連續提問：
+
+| 情境／輪次 | 問題 | 結果 |
+|---|---|---|
+| 1-1 | 我今天第一天報到，筆電要去哪裡拿？ | ✅ 持帳號開通單到 18F 資訊處服務櫃台、簽保管切結書，附出處 IT-FAQ-007 |
+| 1-2 | MFA 是什麼？一定要設嗎？ | ✅ 到職 7 日內完成，否則無法登入 Outlook 網頁版、Teams、VPN |
+| 1-4 | 主管一直說「照會件」，那是什麼？ | ✅ 解釋正確，引用核保與理賠 SOP 的照會章節 |
+| 1-5 | 公司有員工宿舍嗎？我住台中 | ✅ 回答查不到，並提示洽詢聯絡窗口 |
+| 2-1 | 客戶說要解約，保單才買 1 年，我要注意什麼？ | ✅ 說明解約損失、替代方案，附出處 |
+| 2-2 | 他其實只是缺錢，保單借款可以借多少？（追問） | ✅ 傳統型 80%、利變型 90%、2 個工作天撥款 |
+| 2-3 | 那「減額繳清」又是什麼？（追問） | ✅ 定義正確 |
+| 3-1 | 我在家，AuroraLink 打不開 | 🟡 給出正確的 FortiClient 連線步驟，但開頭說「查不到直接相關資訊」，也沒有提醒 AuroraLink 已廢止 |
+| 3-2 | 改用 FortiClient 了，跳出 -14（追問） | 🟡 內容正確（網路封鎖 VPN、改用手機熱點），但同樣先說查不到、沒有標出處 |
+| 3-3 | 熱點也不行（追問） | 🟡 內容正確（撥分機 5000），沒有標出處；只看本輪問題時檢索第一名是專案報告，合併前一題後正確段落排第一 |
+
+- 每題檢索 0.1–0.3 秒，生成 12–30 秒（含對話歷史後 prompt 較長，比 6.2 節的 68 題評估慢）。
+- 回答中偶爾照抄 prompt 的排版文字（「資料 1｜引用標註：」）或重複列出出處。
+- 情境 1 第 3 輪「我什麼時候可以開始用理賠系統查資料？」：答案在 SYS-001（LIFE-Core 權限申請），檢索卻排到理賠 SOP，屬於檢索端的用詞落差。
+
 ---
 
 ## 七、待辦事項
@@ -362,12 +404,16 @@ v1 的「出處有效率 1.000」是因為它很少標出處（只有 24.6% 的�
 - [ ] **出處位置**：目前出處多半集中在最後，可在生成後處理，或在 prompt 中要求逐句標註並加以檢查
 - [ ] **讀錯資料的情況**（如 IT-07）：測試降低回答長度、增加重排序讓正確段落排第一，或改用較大的模型
 - [ ] 比較 Gemma-3-TAIDE 12B（需在 Colab L4／A100 上執行）
-- [ ] **可互動的 RAG 對話程式**：把檢索接進 `chat.py`，回答後列出出處
-- [ ] **多輪對話**：追問時（「那要怎麼申請？」）用前文補全查詢再檢索
+- [ ] **「先說查不到、又照樣回答」**：資料只部分相關時（如 VPN 錯誤代碼），模型會先說查不到再作答且不標出處；可改 prompt 讓「部分相關」也正常作答並標註，或在顯示時偵測這種矛盾
+- [ ] **拒答時轉介正確窗口**：目前只提示查看 GEN-002；可在拒答時另外檢索 GEN-002，直接給出對應部門分機（如住宿問題 → 人資分機 2100）
+- [ ] **答不出來時轉 IT 工單**：情境 3 的設計是自動整理 iService 工單內容（分類、錯誤代碼、已嘗試步驟）
+- [ ] **回答速度**：對話中每題 12–30 秒；可縮短對話歷史、減少參考資料段數（`-k 3`）或限制回答長度
+- [x] **可互動的 RAG 對話程式**：`python -m rag.chat`，回答後列出出處
+- [x] **多輪對話**：追問時合併前一題一起檢索，模型看得到最近 2 輪問答
 
 ### 檢索改善
 
-- [ ] **查詢改寫**：用 GLO-002 縮寫對照表展開縮寫（VIP件、PEP…），或請 LLM 把口語改寫成公文用語，解決目前找不到的 3 個查詢
+- [ ] **查詢改寫**：用 GLO-002 縮寫對照表展開縮寫（VIP件、PEP…），或請 LLM 把口語改寫成公文用語，解決目前找不到的 3 個查詢；以及「理賠系統」對不到 LIFE-Core 這類系統名稱落差
 - [ ] **重排序（reranker）**：例如 bge-reranker-v2-m3 對前 20 名重新排序，目標提升 Hit@1
 - [ ] **跨文件題**：提高 k 或在 prompt 中保留更多段落，改善 Recall@5
 - [ ] **拒答機制**：相似度門檻與 LLM 判斷結合
@@ -375,9 +421,9 @@ v1 的「出處有效率 1.000」是因為它很少標出處（只有 24.6% 的�
 
 ### 工程
 
-- [ ] 生成時的 VRAM 規劃：Llama 4-bit 生成時已用到 6.8 GiB，8 GB 顯卡上**無法再同時放 bge-m3**，即時問答時 bge-m3 要改到 CPU
+- [x] 生成時的 VRAM 規劃：`rag.chat` 中 embedding 模型一律在 CPU 執行，顯卡只放 TAIDE
 - [ ] Gemma 12B 在本機的替代方案：改用 GGUF 版本＋llama.cpp（可穩定地部分放 GPU、部分放 CPU），或固定在 Colab 執行
-- [ ] `genai/` 改成可從 repo 根目錄直接 import（目前需要 `sys.path.insert(0, "genai")`）
+- [x] `genai/` 可從 repo 根目錄直接 import（`from genai.llama_taide import LlamaTaide`）
 - [ ] 使用者介面（例如 Streamlit），顯示答案與出處原文
 
 ---
@@ -398,9 +444,8 @@ v1 的「出處有效率 1.000」是因為它很少標出處（只有 24.6% 的�
 !pip install -q bitsandbytes accelerate "transformers>=5"
 
 # 3. 用已匯出的 prompt 生成（不需要 embedding 模型）
-import json, sys
-sys.path.insert(0, "genai")
-from llama_taide import LlamaTaide
+import json
+from genai.llama_taide import LlamaTaide
 llm = LlamaTaide()
 item = json.loads(open("data/contexts/golden.jsonl", encoding="utf-8").readline())
 print(llm.generate(item["messages"]))

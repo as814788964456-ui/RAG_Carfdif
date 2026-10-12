@@ -107,17 +107,19 @@ def build_user_message(question, hits, cite_tags=False):
 
 
 class ContextBuilder:
-    def __init__(self, config=DEFAULT_CONFIG, k=5, prompt=DEFAULT_PROMPT):
-        """prompt：PROMPTS 中的版本名稱（v1、v2）。"""
-        self.retriever = Retriever(config)
+    def __init__(self, config=DEFAULT_CONFIG, k=5, prompt=DEFAULT_PROMPT, embedders=None):
+        """prompt：PROMPTS 中的版本名稱（v1、v2、v3）。
+        embedders：{模型名稱: embedder}，可傳入在指定裝置（如 CPU）上已載入的模型。"""
+        self.retriever = Retriever(config, embedders=embedders)
         self.k = k
         self.system_prompt = PROMPTS[prompt]["system"]
         self.suffix = PROMPTS[prompt]["suffix"]
         self.cite_tags = PROMPTS[prompt].get("cite_tags", False)
 
-    def build(self, question, history=None):
-        """history: 先前的對話 [{"role": "user"/"assistant", ...}]，會放在 system 與本輪問題之間。"""
-        hits = self.retriever.search(question, self.k)
+    def build(self, question, history=None, search_query=None):
+        """history: 先前的對話 [{"role": "user"/"assistant", ...}]，會放在 system 與本輪問題之間。
+        search_query: 用來檢索的查詢（字串，或多個查詢的 list，各自檢索後融合），預設就是 question。"""
+        hits = self.retriever.search(search_query or question, self.k)
         user = build_user_message(question, hits, self.cite_tags) + self.suffix
         messages = [{"role": "system", "content": self.system_prompt}, *(history or []),
                     {"role": "user", "content": user}]
@@ -128,7 +130,8 @@ class ContextBuilder:
             "prompt": f"{self.system_prompt}\n\n{user}",
             "hits": [
                 {"rank": i, "score": round(score, 4), "chunk_id": c["id"], "source": f"{c['doc_id']}#{c['section']}",
-                 "title": c["title"], "path": c["path"], "text": c["text"]}
+                 "doc_id": c["doc_id"], "section": c["section"], "title": c["title"], "version": c["version"],
+                 "effective_date": c["effective_date"], "file": c["file"], "path": c["path"], "text": c["text"]}
                 for i, (c, score) in enumerate(hits, 1)
             ],
         }

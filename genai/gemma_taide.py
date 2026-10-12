@@ -1,13 +1,18 @@
-"""Gemma-3-TAIDE-12b-Chat-2602（約 24 GB，4-bit 量化後約 7–8 GB，VRAM 不夠的部分會放到 CPU）。
+"""Gemma-3-TAIDE-12b-Chat-2602（約 24 GB，4-bit 量化後約 8 GiB，8 GB 顯卡放不下，需用 Colab L4／A100）。
 
 用法:
     python gemma_taide.py "問題"            # 單次問答
     python gemma_taide.py "問題" --no-4bit  # 不量化（需要足夠 VRAM）
+從 repo 根目錄 import:
+    from genai.gemma_taide import GemmaTaide
 """
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from hardware import load_kwargs
+try:
+    from genai.hardware import load_kwargs  # 從 repo 根目錄 import
+except ImportError:
+    from hardware import load_kwargs  # 在 genai/ 目錄內直接執行
 
 SYSTEM_PROMPT = "你是一個來自台灣的AI助理，你的名字是 TAIDE，樂於以台灣人的立場幫助使用者，會用繁體中文回答問題。"
 

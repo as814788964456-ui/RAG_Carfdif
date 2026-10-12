@@ -13,11 +13,12 @@ CHUNKS_PATH = INDEX_DIR / "chunks.jsonl"
 EMBEDDER_KEYS = ["bge-m3", "xcloud", "xcloud-8k"]
 
 
-def get_embedder(key):
+def get_embedder(key, device=None):
+    """device：bge-m3 執行的裝置（"cpu"／"cuda"，預設有 GPU 就用 GPU）。xcloud 一律在 CPU 執行。"""
     if key == "bge-m3":
         from embedding.bge_m3 import BgeM3Embedder
 
-        return BgeM3Embedder()
+        return BgeM3Embedder(device=device)
     from embedding.xcloud import XCloudEmbedder
 
     return XCloudEmbedder(variant="8k" if key == "xcloud-8k" else "standard")

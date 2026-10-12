@@ -24,7 +24,6 @@ import argparse
 import csv
 import json
 import re
-import sys
 import time
 
 from rag.common import ROOT, load_chunks
@@ -75,9 +74,8 @@ def build_messages(item, prompt, chunks_by_path):
 
 
 def generate(args, out_path):
-    sys.path.insert(0, str(ROOT / "genai"))
-    from gemma_taide import GemmaTaide
-    from llama_taide import LlamaTaide
+    from genai.gemma_taide import GemmaTaide
+    from genai.llama_taide import LlamaTaide
 
     done = set()
     if out_path.exists():

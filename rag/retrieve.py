@@ -106,7 +106,13 @@ class Retriever:
 
     def scores(self, query):
         """回傳每個 chunk 的分數（越高越相關），被排除的 chunk 為 -inf。
-        單一來源時為原始分數（cosine 或 BM25），多來源時為 RRF 分數。"""
+        單一來源時為原始分數（cosine 或 BM25），多來源時為 RRF 分數。
+        query 可以是多個查詢的 list（例如多輪對話中「本輪問題」與「前一輪＋本輪」），各自檢索後以 RRF 融合。"""
+        if isinstance(query, (list, tuple)):
+            if len(query) == 1:
+                return self.scores(query[0])
+            fused = weighted_rrf([(self.scores(q), 1.0) for q in query], self.mask)
+            return np.where(self.mask, fused, -np.inf)
         parts = []
         for name, weight in self.parts:
             if name == "bm25":
