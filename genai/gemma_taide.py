@@ -25,20 +25,24 @@ class GemmaTaide:
         self.model = AutoModelForCausalLM.from_pretrained(self.repo_id, **kwargs)
         self.model.eval()
 
-    def generate(self, messages, max_new_tokens=1024, streamer=None):
-        """messages 為 [{"role": ..., "content": ...}, ...]，回傳模型回覆文字。"""
+    def generate(self, messages, max_new_tokens=1024, streamer=None, **gen_kwargs):
+        """messages 為 [{"role": ..., "content": ...}, ...]，回傳模型回覆文字。
+
+        gen_kwargs 可覆蓋取樣參數，例如 do_sample=False（每次輸出相同，評估時使用）。
+        """
         inputs = self.tokenizer.apply_chat_template(
             messages, add_generation_prompt=True, return_tensors="pt", return_dict=True
         ).to(self.model.device)
+        params = {"do_sample": True, "temperature": 0.7, "top_p": 0.9, "repetition_penalty": 1.1, **gen_kwargs}
+        if not params["do_sample"]:
+            params.pop("temperature", None)
+            params.pop("top_p", None)
         with torch.inference_mode():
             output = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.9,
-                repetition_penalty=1.1,
                 streamer=streamer,
+                **params,
             )
         reply = self.tokenizer.decode(output[0, inputs["input_ids"].shape[1]:], skip_special_tokens=True)
         return reply.strip()
